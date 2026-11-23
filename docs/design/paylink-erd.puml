@@ -1,0 +1,346 @@
+@startuml paylink-erd
+title PayLink - Logical Relational ERD (Database Design v4)
+
+hide circle
+hide methods
+hide empty members
+skinparam dpi 170
+skinparam shadowing false
+skinparam roundcorner 6
+skinparam linetype polyline
+skinparam nodesep 60
+skinparam ranksep 75
+skinparam classAttributeIconSize 0
+skinparam defaultFontSize 11
+skinparam ArrowFontSize 10
+skinparam ArrowColor #333333
+skinparam packageStyle rectangle
+skinparam package {
+  BorderColor #888888
+  FontStyle bold
+}
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #444444
+  AttributeFontSize 10
+}
+
+package "Accounts & Wallet" #E8F1FB {
+  class users {
+    user_id  [PK]
+    full_name
+    phone  [UQ]
+    email  [UQ]
+    password_hash
+    role
+    verification_level?
+    created_at
+  }
+  class account_block {
+    block_id  [PK]
+    user_id  [FK]
+    blocked_by?  [FK]
+    unblocked_by?  [FK]
+    block_type
+    reason
+    blocked_at
+    blocked_until?
+    unblocked_at?
+  }
+  class wallet {
+    wallet_id  [PK, UQ1]
+    user_id?  [FK, UQ, UQ1]
+    wallet_type
+    currency
+    created_at
+  }
+  class ledger_entry {
+    entry_id  [PK]
+    wallet_id  [FK]
+    payment_id?  [FK]
+    top_up_id?  [FK]
+    entry_type
+    available_delta
+    held_delta
+    posting_key  [UQ]
+    created_at
+  }
+  class top_up {
+    top_up_id  [PK]
+    wallet_id  [FK]
+    agent_id?  [FK]
+    method
+    amount
+    status
+    gateway_reference?
+    created_at
+  }
+}
+
+package "Payments & Billers" #EAF6EA {
+  class biller {
+    biller_id  [PK]
+    code  [UQ]
+    name
+    integration_type
+    is_active
+    timeout_seconds?
+    callback_wait_seconds?
+    created_at
+  }
+  class biller_service {
+    service_id  [PK]
+    biller_id  [FK, UQ1]
+    fee_rule_id  [FK]
+    code  [UQ1]
+    name
+    category
+    min_amount
+    max_amount
+    is_active
+    created_at
+  }
+  class service_input_field {
+    field_id  [PK, UQ2]
+    service_id  [FK, UQ1, UQ2]
+    field_key  [UQ1]
+    label
+    data_type
+    is_required
+    validation_pattern?
+    display_order
+    is_active
+    created_at
+  }
+  class payment {
+    payment_id  [PK, UQ2, UQ3]
+    customer_id  [FK, CFK1, UQ1]
+    agent_id?  [FK]
+    wallet_id  [FK, CFK1]
+    service_id  [FK, UQ2]
+    promotion_id?  [FK]
+    payment_reference  [UQ, UQ3]
+    idempotency_key  [UQ1]
+    bill_amount
+    fee_amount
+    status
+    failure_code?
+    failure_message?
+    biller_reference?
+    commission_rate?
+    commission_amount?
+    retry_count
+    next_action_at?
+    created_at
+    updated_at
+  }
+  class payment_input_value <<composite PK>> {
+    payment_id  [PK, FK, CFK2]
+    field_id  [PK, FK, CFK3]
+    service_id  [FK, CFK2, CFK3]
+    value
+    created_at
+  }
+  class payment_status_history {
+    history_id  [PK]
+    payment_id  [FK, UQ1]
+    changed_by?  [FK]
+    from_status?
+    to_status  [UQ1]
+    trigger
+    changed_at
+  }
+}
+
+package "Fees & Promotions" #FFF4DD {
+  class fee_rule {
+    fee_rule_id  [PK]
+    name
+    rule_type
+    fixed_amount?
+    percentage_rate?
+    min_fee?
+    created_at
+  }
+  class fee_tier {
+    tier_id  [PK]
+    fee_rule_id  [FK, UQ1]
+    upper_bound?  [UQ1]
+    fee_amount
+    created_at
+  }
+  class promotion {
+    promotion_id  [PK]
+    biller_id  [FK]
+    name
+    starts_at
+    ends_at
+    is_enabled
+    created_at
+  }
+}
+
+package "Integrations & Callbacks" #F3E8FA {
+  class biller_interaction {
+    interaction_id  [PK]
+    biller_id  [FK, CFK4]
+    payment_id?  [FK]
+    kind
+    outcome
+    biller_error_code?
+    external_event_id?
+    callback_event_key?  [FK, CFK4]
+    raw_payload?
+    occurred_at
+  }
+  class callback_event <<composite PK>> {
+    biller_id  [PK, FK]
+    event_key  [PK]
+    key_source
+    first_received_at
+  }
+  class outbox_event {
+    outbox_id  [PK]
+    payment_id  [FK, UQ1]
+    event_type  [UQ1]
+    status
+    published_at?
+    payload?
+    created_at
+  }
+}
+
+package "Notifications & Operations" #FDEBEB {
+  class notification {
+    notification_id  [PK]
+    user_id  [FK, UQ1]
+    payment_id  [FK, UQ1]
+    channel  [UQ1]
+    event_type  [UQ1]
+    status
+    created_at
+  }
+  class notification_attempt {
+    attempt_id  [PK]
+    notification_id  [FK, UQ1]
+    attempt_number  [UQ1]
+    attempted_at
+    outcome
+    error_detail?
+  }
+  class audit_log {
+    audit_id  [PK]
+    actor_user_id?  [FK]
+    actor_type
+    action
+    entity_type
+    entity_id
+    reason
+    old_value?
+    new_value?
+    created_at
+  }
+  class system_config {
+    config_key  [PK]
+    updated_by?  [FK]
+    config_value
+    value_type
+    description
+    updated_at
+    created_at
+  }
+}
+
+package "Settlement & Reconciliation" #E6F7F7 {
+  class settlement_file {
+    settlement_file_id  [PK]
+    biller_id  [FK, UQ1]
+    settlement_date
+    file_name  [UQ1]
+    received_at
+    status
+  }
+  class settlement_record {
+    record_id  [PK]
+    settlement_file_id  [FK]
+    payment_id?  [FK, CFK5]
+    payment_reference  [FK, CFK5]
+    reported_amount
+    reported_status
+    created_at
+  }
+  class reconciliation_difference {
+    difference_id  [PK]
+    settlement_file_id  [FK]
+    settlement_record_id?  [FK]
+    payment_id?  [FK]
+    reviewed_by?  [FK]
+    difference_type
+    detail
+    review_status
+    review_note?
+    reviewed_at?
+    created_at
+  }
+}
+
+' Relationships: multiplicity next to each entity = number of records of THAT entity per one record of the other.
+users "0..1" -down- "0..1" wallet : user_id
+users "1" -down- "0..*" account_block : user_id
+users "0..1" -down- "0..*" account_block : blocked_by
+users "0..1" -down- "0..*" account_block : unblocked_by
+wallet "1" -down- "0..*" ledger_entry : wallet_id
+payment "0..1" -- "0..*" ledger_entry : payment_id
+top_up "0..1" -down- "0..1" ledger_entry : top_up_id
+wallet "1" -down- "0..*" top_up : wallet_id
+users "0..1" -- "0..*" top_up : agent_id
+biller "1" -down- "0..*" biller_service : biller_id
+fee_rule "1" -down- "0..*" biller_service : fee_rule_id
+biller_service "1" -- "0..*" service_input_field : service_id
+fee_rule "1" -left- "0..*" fee_tier : fee_rule_id
+biller "1" -down- "0..*" promotion : biller_id
+users "1" -right- "0..*" payment : customer_id
+users "0..1" -right- "0..*" payment : \n\nagent_id
+wallet "1" -right- "0..*" payment : CFK1
+biller_service "1" -down- "0..*" payment : service_id
+promotion "0..1" -- "0..*" payment : promotion_id
+payment "1" -down- "0..*" payment_input_value : CFK2
+service_input_field "1" -down- "0..*" payment_input_value : CFK3
+payment "1" -down- "1..*" payment_status_history : payment_id
+users "0..1" -right- "0..*" payment_status_history : changed_by
+biller "1" -- "0..*" biller_interaction : biller_id
+payment "0..1" -- "0..*" biller_interaction : payment_id
+biller "1" -down- "0..*" callback_event : biller_id
+callback_event "0..1" -down- "1..*" biller_interaction : CFK4
+payment "1" -down- "0..*" outbox_event : payment_id
+users "1" -left- "0..*" notification : user_id
+payment "1" -down- "0..*" notification : payment_id
+notification "1" -down- "0..*" notification_attempt : notification_id
+biller "1" -down- "0..*" settlement_file : biller_id
+settlement_file "1" -down- "0..*" settlement_record : settlement_file_id
+payment "0..1" -- "0..*" settlement_record : CFK5
+settlement_file "1" -- "0..*" reconciliation_difference : settlement_file_id
+settlement_record "0..1" -down- "0..*" reconciliation_difference : settlement_record_id
+payment "0..1" -- "0..*" reconciliation_difference : payment_id
+users "0..1" -down- "0..*" reconciliation_difference : reviewed_by
+users "0..1" -up- "0..*" audit_log : actor_user_id
+users "0..1" -up- "0..*" system_config : updated_by
+
+' Layout hints only (invisible, no meaning in the model)
+audit_log -[hidden]right- system_config
+biller_service -[hidden]right- service_input_field
+service_input_field -[hidden]right- promotion
+payment -[hidden]right- biller_interaction
+fee_rule -[hidden]left- fee_tier
+biller -[hidden]right- callback_event
+
+legend bottom
+  |= Symbol |= Meaning |= Symbol |= Meaning |
+  | PK | Primary Key | 1 | Exactly one |
+  | FK | Foreign Key | 0..1 | Zero or one |
+  | UQ | Unique Key (UQ1, UQ2... = one composite key) | 1..* | One or many |
+  | CFK | Composite Foreign Key (CFK1 to CFK5) | 0..* | Zero or many |
+  | ? | Nullable attribute | | |
+endlegend
+
+@enduml
