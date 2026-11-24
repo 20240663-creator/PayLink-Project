@@ -1,0 +1,149 @@
+@startuml
+left to right direction
+skinparam shadowing false
+skinparam actorStyle awesome
+skinparam nodesep 20
+skinparam ranksep 95
+skinparam defaultFontName Arial
+skinparam defaultFontSize 13
+
+skinparam rectangle {
+  BackgroundColor #FFFFFF
+  BorderColor #333333
+}
+
+skinparam usecase {
+  BackgroundColor #E8F4FD
+  BorderColor #1F77B4
+}
+
+' Base Actor
+actor "User" as User
+
+' Primary Actors (Stacked vertically on the Left)
+actor "Customer" as Customer
+actor "Agent" as Agent
+actor "Support Employee" as Support
+actor "Admin" as Admin
+
+User <|-- Customer
+User <|-- Agent
+User <|-- Support
+User <|-- Admin
+
+Customer -[hidden]d- Agent
+Agent -[hidden]d- Support
+Support -[hidden]d- Admin
+
+' System Boundary (Strictly 2 clean internal columns)
+rectangle "PayLink System" {
+
+  ' Column 1: Primary User-Facing Use Cases
+  usecase "Login" as UC1
+
+  usecase "Register Account" as UC2
+  usecase "Request Verification Upgrade" as UC3
+  usecase "View Wallet Balance & History" as UC4
+  usecase "View Billers & Required Fields" as UC5
+  usecase "Request Refund" as UC6
+  usecase "Inquire Bill & Preview Fees" as UC7
+  usecase "Pay Bill" as UC8
+  usecase "Top-Up Wallet" as UC9
+
+  usecase "Pay Bill on Behalf of Customer" as UC10
+
+  usecase "Review Reconciliation Report" as UC15
+  usecase "Approve / Reject Verification Upgrade" as UC11
+  usecase "Block / Unblock Customer Account" as UC12
+  usecase "Search Payment History" as UC13
+  usecase "Approve / Reject Refund" as UC14
+
+  usecase "Manage Billers & Services" as UC16
+  usecase "Configure Fees & Limits" as UC17
+  usecase "View Audit Logs" as UC18
+  usecase "View Daily Financial Totals" as UC19
+
+  ' Column 2: Extensions, Includes & Background Processes (Aligned with Secondary Actors)
+  usecase "Retry Failed Notification" as UC21
+  usecase "Send Payment Notification" as UC20
+  usecase "Calculate Service Fees" as UC22
+  usecase "Validate Limits & Fraud Rules" as UC23
+  usecase "Refund Failed Payment" as UC24
+  usecase "Process Async Biller Callback" as UC26
+  usecase "Handle Biller Timeout & Retries" as UC27
+  usecase "Calculate Agent Commission" as UC25
+  usecase "Run Daily Settlement Reconciliation" as UC28
+}
+
+' Secondary Actors (Locked in a single vertical column on the Right)
+together {
+  actor "Notification Provider\n(SMS / Push)" as NotifProvider <<System>>
+  actor "External Biller\n(ElectroCo / AquaCo / TopUpNet)" as Biller <<System>>
+  actor "System Scheduler" as Scheduler <<System>>
+}
+
+NotifProvider -[hidden]d- Biller
+Biller -[hidden]d- Scheduler
+
+' Primary Actor Associations
+User --- UC1
+
+Customer -- UC2
+Customer -- UC3
+Customer -- UC4
+Customer -- UC5
+Customer -- UC6
+Customer -- UC7
+Customer -- UC8
+Customer -- UC9
+
+Agent -- UC9
+Agent -- UC10
+
+Support -- UC15
+Support -- UC11
+Support -- UC12
+Support -- UC13
+Support -- UC14
+
+Admin -- UC16
+Admin -- UC17
+Admin -- UC18
+Admin -- UC19
+
+' Keep UC10 in Column 1 right below UC8 (single dot = vertical in LR mode)
+UC8 <. UC10 : <<include>>
+
+' Include Relationships (Column 1 -> Column 2)
+UC7 ..> UC22 : <<include>>
+UC8 ..> UC22 : <<include>>
+UC8 ..> UC23 : <<include>>
+
+' Extend Relationships (Column 1 <- Column 2)
+UC8 <.. UC20 : <<extend>>
+UC21 .> UC20 : <<extend>>
+UC8 <.. UC24 : <<extend>>
+UC8 <.. UC26 : <<extend>>
+UC8 <.. UC27 : <<extend>>
+UC10 <.. UC25 : <<extend>>
+
+' Anchor UC28 in Column 2 right next to Biller & Scheduler
+UC15 -[hidden]-> UC28
+
+' Secondary Actor Associations (Color-coded for instant readability)
+' Notification Provider (Green)
+UC21 -[#2E7D32]- NotifProvider
+UC20 -[#2E7D32]- NotifProvider
+
+' External Biller (Blue)
+UC7 -[#1565C0]-- Biller
+UC8 -[#1565C0]-- Biller
+UC26 -[#1565C0]- Biller
+UC27 -[#1565C0]- Biller
+UC28 -[#1565C0]- Biller
+
+' System Scheduler (Purple)
+UC27 -[#6A1B9A]- Scheduler
+UC28 -[#6A1B9A]- Scheduler
+
+@enduml
