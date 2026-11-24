@@ -1,0 +1,358 @@
+@startuml PayLink_Domain_Class_Diagram
+title PayLink - Domain Class Diagram (simplified)
+
+skinparam classAttributeIconSize 0
+hide empty members
+
+' ================= ACCOUNTS & WALLET =================
+package "Accounts & Wallet" {
+  enum Role {
+    CUSTOMER
+    AGENT
+    SUPPORT
+    ADMIN
+}
+
+enum VerificationLevel {
+    BASIC
+    VERIFIED
+}
+
+  class User {
+    id : Long
+    name : String
+    email : String
+    phone : String
+    passwordHash : String
+    role : Role
+    verificationLevel : VerificationLevel
+    blocked : boolean
+    blockedUntil : Instant
+  }
+
+  class Wallet {
+    id : Long
+    availableBalance() : BigDecimal
+    heldBalance() : BigDecimal
+  }
+
+  enum LedgerType {
+    TOPUP
+    HOLD
+    HOLD_RELEASE
+    CAPTURE
+    FEE_INCOME
+    COMMISSION
+  }
+
+  class LedgerEntry {
+    id : Long
+    type : LedgerType
+    amount : BigDecimal
+    createdAt : Instant
+  }
+
+  class AuditLog {
+    id : Long
+    who : String
+    action : String
+    why : String
+    when : Instant
+  }
+}
+
+User "1" -- "0..1" Wallet
+Wallet "1" *-- "*" LedgerEntry
+Payment "0..1" -- "0..*" LedgerEntry
+
+' ================= BILLER CATALOG =================
+package "Biller Catalog" {
+  class Biller {
+    id : Long
+    code : String
+    name : String
+    protocol : String
+    active : boolean
+  }
+
+  class BillerService {
+    id : Long
+    type : String
+    requiredFields : String
+    minAmount : BigDecimal
+    maxAmount : BigDecimal
+    active : boolean
+  }
+}
+
+Biller "1" *-- "*" BillerService
+
+' ================= PAYMENT PROCESSING =================
+package "Payment Processing" {
+  enum PaymentStatus {
+    INITIATED
+    FUNDS_HELD
+    SENT_TO_BILLER
+    COMPLETED
+    FAILED
+    UNKNOWN
+    REJECTED
+    REFUNDED
+  }
+
+  class Payment {
+    id : Long
+    reference : String
+    idempotencyKey : String
+    billReference : String
+    amount : BigDecimal
+    fee : BigDecimal
+    total : BigDecimal
+    status : PaymentStatus
+    failureReason : String
+    createdAt : Instant
+  }
+
+  class PaymentStatusHistory {
+    id : Long
+    fromStatus : PaymentStatus
+    toStatus : PaymentStatus
+    changedAt : Instant
+  }
+
+  interface PaymentState <<State pattern>> {
+    onFundsHeld()
+    onRejected()
+    onSentToBiller()
+    onConfirmed()
+    onRefused()
+    onTimeout()
+    onHoldReleased()
+  }
+
+  note right of PaymentState
+    One class per status
+    (InitiatedState, FundsHeldState, ...).
+    Invalid transitions throw an exception.
+  end note
+
+  class PaymentService {
+    inquire()
+    pay()
+    handleBillerResult()
+  }
+}
+
+Payment --> PaymentStatus
+Payment "1" *-- "*" PaymentStatusHistory
+Payment ..> PaymentState
+Payment "*" -- "1" User : payer
+Payment "*" -- "0..1" User : agent
+Payment "*" -- "1" BillerService
+PaymentService ..> Payment
+
+' ================= FEES & COMMISSIONS =================
+package "Fees & Commissions" {
+  interface FeeStrategy <<Strategy pattern>> {
+    calculate(amount) : BigDecimal
+  }
+
+  class FixedFee
+  class PercentageFee
+  class TieredFee
+
+  class Promotion {
+    startDate : LocalDate
+    endDate : LocalDate
+  }
+
+  class FeeConfiguration {
+    id : Long
+    feeValue : BigDecimal
+    transactionLimit : BigDecimal
+    updatedAt : Instant
+  }
+
+  class FeeCalculator {
+    calculateFee()
+    calculateCommission()
+  }
+}
+
+FeeStrategy <|.. FixedFee
+FeeStrategy <|.. PercentageFee
+FeeStrategy <|.. TieredFee
+
+FeeCalculator --> FeeStrategy
+FeeCalculator ..> Promotion
+Promotion "*" -- "1" Biller
+Biller "1" -- "*" FeeConfiguration
+User "1" -- "*" FeeConfiguration : manages
+PaymentService ..> FeeCalculator
+
+' ================= FRAUD CHECKS =================
+package "Fraud Checks" {
+  interface FraudRule <<Chain of Responsibility>> {
+    check(user, amount) : boolean
+  }
+
+  class SingleAmountRule
+  class BlockedAccountRule
+  class DailyLimitRule
+  class VelocityRule
+}
+
+FraudRule <|.. SingleAmountRule
+FraudRule <|.. BlockedAccountRule
+FraudRule <|.. DailyLimitRule
+FraudRule <|.. VelocityRule
+FraudRule --> FraudRule : next
+PaymentService ..> FraudRule
+
+' ================= BILLER INTEGRATION =================
+package "Biller Integration" {
+  interface BillerAdapter <<Adapter pattern>> {
+    inquire(billRef) : BigDecimal
+    pay(payment) : BillerResult
+    queryStatus(reference) : BillerResult
+  }
+
+  class ElectroCoAdapter
+  class AquaCoAdapter
+  class TopUpNetAdapter
+  class NetCoAdapter
+
+  class BillerAdapterFactory <<Factory pattern>> {
+    forBiller(code) : BillerAdapter
+  }
+
+  class BillerResult {
+    outcome : String
+    errorCode : String
+    reason : String
+  }
+
+  class BillerCallback {
+    externalReference : String
+    result : String
+    processed : boolean
+  }
+}
+
+BillerAdapter <|.. ElectroCoAdapter
+BillerAdapter <|.. AquaCoAdapter
+BillerAdapter <|.. TopUpNetAdapter
+BillerAdapter <|.. NetCoAdapter
+
+BillerAdapterFactory ..> BillerAdapter
+BillerAdapter ..> BillerResult
+BillerCallback "*" -- "1" Payment
+PaymentService ..> BillerAdapterFactory
+
+' ================= NOTIFICATIONS =================
+package "Notifications" {
+  class Notification {
+    id : Long
+    channel : String
+    status : String
+    attempts : int
+    message : String
+  }
+
+  interface NotificationSender {
+    send(notification) : boolean
+  }
+
+  class SmsSender
+  class PushSender
+
+  class NotificationService {
+    notifyPayment(payment)
+    retryFailed()
+  }
+}
+
+NotificationSender <|.. SmsSender
+NotificationSender <|.. PushSender
+NotificationService --> NotificationSender
+NotificationService "1" *-- "*" Notification
+Notification "*" -- "1" Payment
+
+' ================= RECONCILIATION =================
+package "Reconciliation" {
+  class SettlementFile {
+    id : Long
+    fileDate : LocalDate
+    fileName : String
+  }
+
+  class SettlementRecord {
+    billerReference : String
+    amount : BigDecimal
+    status : String
+    fileDate : LocalDate
+  }
+
+  class Discrepancy {
+    type : String
+    details : String
+    resolved : boolean
+  }
+
+  class ReconciliationReport {
+    id : Long
+    generatedAt : Instant
+    status : String
+  }
+
+  class ReconciliationService {
+    reconcile(records)
+  }
+}
+
+SettlementFile "1" *-- "*" SettlementRecord
+SettlementFile "1" -- "1" ReconciliationReport
+ReconciliationReport "1" *-- "*" Discrepancy
+
+ReconciliationService ..> SettlementFile
+ReconciliationService ..> ReconciliationReport
+Discrepancy "*" -- "0..1" Payment
+
+' ================= REFUNDS =================
+package "Refunds" {
+  class RefundRequest {
+    id : Long
+    status : String
+    reason : String
+    createdAt : Instant
+  }
+}
+
+Payment "1" -- "0..1" RefundRequest
+User "1" -- "0..*" RefundRequest : requests
+User "0..1" -- "0..*" RefundRequest : reviews
+
+' ================= FINANCIAL REPORTING =================
+package "Financial Reporting" {
+  class FinancialReport {
+    id : Long
+    reportDate : LocalDate
+    totalPayments : BigDecimal
+    feesEarned : BigDecimal
+    commissionsPaid : BigDecimal
+    failedPayments : int
+  }
+}
+
+Biller "1" -- "*" FinancialReport
+
+' ================= AUDIT RELATIONSHIP =================
+User "0..1" -- "*" AuditLog : performs
+
+' ================= WALLET NOTE =================
+note bottom of Wallet
+  No stored balance. Balances = sum of
+  LedgerEntry rows (BigDecimal only).
+end note
+
+@enduml
