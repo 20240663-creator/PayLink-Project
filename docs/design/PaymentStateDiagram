@@ -1,0 +1,39 @@
+@startuml
+title PayLink - Payment Life Cycle
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam state {
+  BackgroundColor #F5F5F5
+  BorderColor #444444
+}
+skinparam nodesep 50
+skinparam ranksep 45
+
+[*] --> Initiated : payment request received
+
+Initiated --> FundsHeld : fraud checks pass\nand wallet has enough funds
+Initiated --> Rejected : fraud check fails\nor insufficient funds
+
+FundsHeld --> SentToBiller : request sent to biller
+
+SentToBiller --> Completed : biller confirms
+SentToBiller --> Failed : biller refuses
+SentToBiller --> Unknown : no answer within\n10 s timeout
+
+Unknown --> Completed : biller later confirms\n(callback, retry, settlement file)
+Unknown --> Failed : biller later refuses, or\nreconciliation finds no payment
+
+Failed --> Refunded : hold released\nto wallet
+
+Completed --> [*]
+Rejected --> [*]
+Refunded --> [*]
+
+state Initiated : no money moved yet
+state FundsHeld : amount + fee moved\nto held balance
+state Completed : FINAL\nhold captured, fee income credited,\nagent commission recorded
+state Rejected : FINAL\nno hold was created
+state Refunded : FINAL
+state Unknown : money stays held\nnever refunded automatically\nre-queried at 1, 5, 15 min,\nthen waits for reconciliation
+
+@enduml
