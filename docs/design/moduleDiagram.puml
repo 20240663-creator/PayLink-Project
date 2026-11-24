@@ -1,0 +1,115 @@
+@startuml paylink-ModuleDiagram
+title PayLink - Modular Monolith Architecture (Phase 1)
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam nodesep 35
+skinparam ranksep 45
+
+actor "Customer / Agent" as User
+actor "Admin / Support" as Staff
+
+rectangle "PayLink Application (single deployable unit)" as APP {
+
+  rectangle "Presentation Layer" as PRES {
+    component "REST Controllers\n+ Callback Endpoint" as API
+    component "Authentication and\nAuthorization" as AUTH
+  }
+
+  rectangle "Application Layer" as APPL {
+    rectangle "Core Business Modules" as CORE {
+      component "Payment Processing" as PAY
+      component "Accounts and Wallet" as WAL
+      component "Biller Catalog" as CAT
+      component "Fees and Commissions" as FEE
+      component "Fraud Checks" as FRD
+    }
+    rectangle "Integration Module" as INT {
+      component "Biller Integration\n(one adapter per biller)" as BI
+    }
+    rectangle "Supporting Modules" as SUP {
+      component "Notifications" as NOT
+      component "Reconciliation" as REC
+    }
+    rectangle "Event Infrastructure" as EVT {
+      component "In-Process\nEvent Dispatcher" as DISP
+      component "Transactional\nOutbox" as OUTB
+    }
+    component "Scheduled Jobs" as JOB
+  }
+
+  rectangle "Infrastructure Layer" as INFRA {
+    component "Repositories / ORM\n+ Audit Log" as REPO
+    database "MySQL\n(module-owned tables)" as DB
+  }
+}
+
+rectangle "External Systems" as EXT {
+  component "ElectroCo\nREST / JSON" as ELEC
+  component "AquaCo\nSOAP / XML" as AQUA
+  component "TopUpNet\nREST + Callback" as TOP
+  component "NetCo\nCSV Batch (optional)" as NET
+  component "SMS / Push / Email\nProviders" as SMS
+  component "Settlement Files" as SETT
+}
+
+' --- clients ---
+User --> API
+Staff --> API
+API --> AUTH
+
+' --- API to modules ---
+API --> PAY
+API --> WAL
+API --> CAT
+API --> REC : view report
+
+' --- payment orchestration ---
+PAY --> FRD : check
+PAY --> CAT : validate
+PAY --> FEE : calculate
+PAY --> WAL : hold / capture / release
+PAY --> BI : submit
+
+' --- events ---
+PAY ..> DISP : publish events
+WAL ..> DISP : wallet events
+BI ..> DISP : biller result
+DISP --> OUTB : persist
+DISP ..> NOT : payment events
+DISP ..> PAY : biller result
+
+' --- jobs ---
+JOB --> OUTB : publish pending
+JOB --> BI : re-query Unknown\n(1, 5, 15 min)
+JOB --> REC : nightly run
+
+' --- external ---
+BI --> ELEC
+BI --> AQUA
+BI --> TOP
+BI --> NET
+TOP ..> API : async callback
+NOT --> SMS : retry x3
+SETT --> REC
+
+' --- persistence (one arrow per layer, not per module) ---
+APPL --> REPO : all modules persist via repositories
+REPO --> DB
+
+note right of PAY
+  States: Initiated, FundsHeld, SentToBiller,
+  Completed, Failed, Rejected, Unknown, Refunded
+  + Idempotency, orchestration
+end note
+
+note bottom of BI
+  Timeout 10s, retries,
+  protocol isolation
+end note
+
+note bottom of DB
+  Ledger entries, holds, outbox table,
+  audit log. Balance = SUM(ledger)
+end note
+@enduml

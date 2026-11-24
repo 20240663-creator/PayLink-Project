@@ -1,0 +1,78 @@
+@startuml
+title PayLink - Refund a Failed Payment
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam maxMessageSize 160
+skinparam sequenceMessageAlign center
+autonumber
+
+actor Customer
+participant "Client App" as CL
+participant "API Layer" as API
+participant "Payment\nProcessing" as PAY
+participant "Accounts and\nWallet" as WAL
+database "MySQL" as DB
+participant "Event Dispatcher\n+ Outbox" as EVT
+participant "Biller\nIntegration" as BI
+participant "External\nBiller" as EXT
+participant "Notifications" as NOT
+participant "SMS / Push\nProvider" as SMS
+
+note over PAY, DB
+  Starting point: payment is SentToBiller.
+  amount + fee are already in the held balance
+  (hold created during "Pay a Bill"). No new debit.
+end note
+
+== 1. Biller refuses ==
+PAY -> BI : send(payment, unique reference)
+BI -> EXT : payment request (10 s timeout)
+EXT --> BI : refused (biller error code, e.g. amount above bill)
+BI -> BI : map biller error code to common reason
+BI --> PAY : refused + common reason
+PAY -> DB : state SentToBiller -> Failed
+
+== 2. Release the hold ==
+group single DB transaction
+  PAY -> WAL : release hold(payment)
+  WAL -> DB : lock wallet row (SELECT ... FOR UPDATE)
+  WAL -> DB : ledger entry HOLD_RELEASE\n(held balance down, available balance up)
+  WAL --> PAY : hold released
+  PAY -> DB : state Failed -> Refunded
+  PAY -> DB : write audit record (who, when, why)
+  PAY -> DB : write outbox event PaymentFailed(reason)
+end
+
+== 3. Notify customer ==
+EVT -> NOT : PaymentFailed (from outbox)
+NOT -> SMS : send SMS + push with clear reason
+alt delivered
+  SMS --> NOT : ok
+else provider fails
+  loop up to 3 times
+    NOT -> SMS : retry
+  end
+  NOT -> DB : mark message undelivered
+  note right of NOT
+    Payment result is not affected.
+    Support can still see the status.
+  end note
+end
+
+== 4. Status ==
+Customer -> CL : check payment status
+CL -> API : GET /payments/{reference}
+API -> PAY : getStatus(reference)
+PAY --> API : Refunded + reason + amount returned
+API --> CL : status
+CL --> Customer : payment failed, amount returned to wallet
+
+== Timeout case (not a refund) ==
+note over PAY, EXT
+  If the biller does NOT answer within 10 s:
+  state SentToBiller -> Unknown, hold stays,
+  NO refund. Re-queried at 1, 5, 15 minutes,
+  then waits for reconciliation.
+  Refund happens only after the payment becomes Failed.
+end note
+@enduml

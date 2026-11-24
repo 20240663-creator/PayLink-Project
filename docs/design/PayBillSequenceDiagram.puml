@@ -1,0 +1,130 @@
+@startuml
+title PayLink - Pay a Bill
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam maxMessageSize 160
+skinparam sequenceMessageAlign center
+autonumber
+
+actor Customer
+participant "Client App" as CL
+participant "API Layer" as API
+participant "Payment\nProcessing" as PAY
+participant "Fraud\nChecks" as FRD
+participant "Biller\nCatalog" as CAT
+participant "Fees and\nCommissions" as FEE
+participant "Accounts and\nWallet" as WAL
+database "MySQL" as DB
+participant "Event Dispatcher\n+ Outbox" as EVT
+participant "Biller\nIntegration" as BI
+participant "External\nBiller" as EXT
+participant "Notifications" as NOT
+participant "SMS / Push\nProvider" as SMS
+
+== 1. Bill inquiry ==
+Customer -> CL : choose biller, enter meter number
+CL -> API : POST /inquiries
+API -> PAY : inquire(biller, fields)
+PAY -> CAT : validate biller, service, fields
+CAT --> PAY : valid
+PAY -> BI : inquire(meter number)
+BI -> EXT : bill inquiry (adapter translates protocol)
+EXT --> BI : 350.00 EGP due
+BI --> PAY : bill amount
+PAY -> FEE : calculate fee(biller, amount)
+FEE --> PAY : 2.50 EGP
+PAY --> API : amount 350.00 + fee 2.50 = total 352.50
+API --> CL : inquiry result
+CL --> Customer : show amount, fee, total
+
+== 2. Submit payment ==
+Customer -> CL : confirm payment
+CL -> CL : generate Idempotency-Key (UUID)
+CL -> API : POST /payments + Idempotency-Key header
+API -> API : authenticate and validate request
+API -> PAY : pay(request, key)
+PAY -> DB : find payment by (customer, key)
+
+alt key already exists (duplicate request)
+  DB --> PAY : stored payment
+  PAY --> API : original result, no new charge
+  API --> CL : same response as first request
+else new request
+  PAY -> FRD : check(daily limit, single-payment limit,\nvelocity, blocked account)
+
+  alt a rule fails
+    FRD --> PAY : failed + reason
+    PAY -> DB : save payment as Rejected (key stored)
+    PAY --> API : Rejected + clear reason
+    API --> CL : error response
+  else all rules pass
+    FRD --> PAY : passed
+
+    group single DB transaction
+      PAY -> DB : create payment (Initiated) + idempotency key
+      PAY -> WAL : hold(amount + fee)
+      WAL -> DB : lock wallet row (SELECT ... FOR UPDATE)
+
+      alt available balance too low
+        WAL --> PAY : insufficient funds
+        PAY -> DB : state Rejected
+      else enough funds
+        WAL -> DB : ledger entry HOLD (available down, held up)
+        WAL --> PAY : funds held
+        PAY -> DB : state FundsHeld
+        PAY -> DB : write outbox event PaymentFundsHeld
+        PAY -> DB : write audit record
+      end
+    end
+
+    PAY --> API : payment reference + status
+    API --> CL : HTTP 202 Accepted (processing)
+    CL --> Customer : payment is being processed
+  end
+end
+
+== 3. Send to biller (asynchronous) ==
+EVT -> PAY : PaymentFundsHeld (from outbox)
+PAY -> DB : state SentToBiller
+PAY -> BI : send(payment, unique reference)
+BI -> EXT : payment request (10 s timeout)
+
+alt biller confirms
+  EXT --> BI : paid
+  BI --> PAY : confirmed
+
+  group single DB transaction
+    PAY -> WAL : capture hold
+    WAL -> DB : ledger entries: capture hold, credit PayLink fee income
+    opt payment made by an agent
+      PAY -> FEE : commission(fee) = 40%
+      PAY -> WAL : credit agent wallet
+      WAL -> DB : ledger entry COMMISSION
+    end
+    PAY -> DB : state Completed
+    PAY -> DB : write outbox event PaymentCompleted
+    PAY -> DB : write audit record
+  end
+else biller refuses or times out
+  note over PAY, EXT
+    Refused: Failed, hold released, Refunded (see "Refund a Failed Payment").
+    No answer in 10 s: Unknown, money stays held, re-queried at 1, 5, 15 min.
+  end note
+end
+
+== 4. Notification ==
+EVT -> NOT : PaymentCompleted
+NOT -> SMS : send SMS + push receipt
+note right of SMS
+  Provider down: payment stays Completed.
+  Retry 3 times, then mark undelivered.
+end note
+
+== 5. Status ==
+Customer -> CL : check payment status
+CL -> API : GET /payments/{reference}
+API -> PAY : getStatus(reference)
+PAY --> API : Completed + receipt details
+API --> CL : status + receipt
+CL --> Customer : show success and receipt
+@enduml
