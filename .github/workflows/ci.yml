@@ -52,3 +52,7 @@ jobs:
           SPRING_DATASOURCE_USERNAME: paylink_user
           SPRING_DATASOURCE_PASSWORD: paylink_pass
         run: ./mvnw test
+
+      - name: Build Docker Image
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+        run: docker build -t paylink-app:ci .
